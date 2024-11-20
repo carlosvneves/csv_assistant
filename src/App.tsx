@@ -5,8 +5,13 @@ import { Message, TableData, TableRow } from './types';
 import { ChatMessage } from './components/ChatMessage';
 import { DataTable } from './components/DataTable';
 import { ContentPreview } from './components/ContentPreview';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+
+const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GOOGLE_API_KEY || '');
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 function App() {
+
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
@@ -38,7 +43,7 @@ function App() {
             setMessages(prev => [...prev, {
               id: Date.now().toString(),
               type: 'bot',
-              content: `I've loaded the default CSV file with ${validRows.length} rows and ${headers.length} columns. What would you like to know about the data?`
+              content: `Por padrão, eu carrego o arquivo CSV com ${validRows.length} linhas e ${headers.length} colunas. O que gostaria de saber sobre os dados?`
             }]);
           },
           error: (error: any) => {
@@ -75,37 +80,118 @@ function App() {
         const validRows = rows.filter(row => row.some(cell => cell.trim() !== ''));
 
         setTableData({ headers, rows: validRows });
-        setMessages(prev => [...prev, {
-          id: Date.now().toString(),
-          type: 'bot',
-          content: `I've loaded your CSV file with ${validRows.length} rows and ${headers.length} columns. What would you like to know about the data?`
-        }]);
+      //   setMessages(prev => [...prev, {
+      //     id: Date.now().toString(),
+      //     type: 'bot',
+      //     content: `Por padrão, eu carrego o arquivo CSV com ${validRows.length} linhas e ${headers.length} colunas. O que gostaria de saber sobre os dados?`
+      //   }]);
       },
       header: false
     });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim()) return;
+  // const handleSubmit = (e: React.FormEvent) => {
+  //   e.preventDefault();
+  //   if (!input.trim()) return;
 
-    const newMessage: Message = {
+  //   const newMessage: Message = {
+  //     id: Date.now().toString(),
+  //     type: 'user',
+  //     content: input
+  //   };
+
+  //   setMessages(prev => [...prev, newMessage]);
+  //   setInput('');
+
+  //   setTimeout(() => {
+  //     const botResponse: Message = {
+  //       id: (Date.now() + 1).toString(),
+  //       type: 'bot',
+  //       content: `I see you're asking about "${input}". What specific information would you like to know about the data?`
+  //     };
+  //     setMessages(prev => [...prev, botResponse]);
+  //   }, 1000);
+  // };
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!input.trim() || !tableData) return;
+
+    // Add user message
+    const userMessage = {
       id: Date.now().toString(),
-      type: 'user',
-      content: input
+      type: 'user' as const,
+      content: input,
     };
-
-    setMessages(prev => [...prev, newMessage]);
+    setMessages(prev => [...prev, userMessage]);
     setInput('');
 
-    setTimeout(() => {
-      const botResponse: Message = {
+    try {
+      // Create a context string from the table data
+      const tableContext = `This is a CSV file with the following headers: ${tableData.headers.join(', ')}. 
+        It contains ${tableData.rows.length} rows of data.`;
+
+      // Get response from Gemini
+      const prompt = `You are a helpful assistant analyzing CSV data. 
+        
+        Você é um robô informativo que responde perguntas sobre normas (regulations) da ANM em português 
+        a que você possui acesso a partir da seguinte tabela: ${tableContext}.
+
+        O usuário fará perguntas sobre as normas da ANM. Garanta fornecer respostas objetivas.
+        As normas(regulations) possuem uma ementa e um corpo. Aproveite a ementa para responder 
+        a pergunta do usuário pois ele fornece o assunto da norma.
+
+        Ao responder o usuário, seja preciso e garanta citar corretamente o número da norma, as seções, 
+        artigos, parágrafos relevantes para a resposta.
+        
+        Se a pergunta for genérica, ou se você não conseguir responder de modo preciso, 
+        reponda da seguinte forma: 
+        'Desculpe, mas não consegui achar uma resposta clara para a sua pergunta. 
+        Mas está aqui uma resposta aproximada que pode ajudar: \n\n'. 
+        
+        Siga o seguinte template de resposta. Formate a resposta como markdown:
+        
+        ### Tipo de Norma:
+          
+        ### Número da Norma:
+
+        ### Data de publicação:
+
+        ### Seções, artigos, parágrafos relacionados:
+
+        ### Sumário da norma: 
+
+        ### Resposta:
+
+        A resposta deve ser escrita em português e o sumário deve ter no máximo 50 palavras.
+        
+        Pergunta do usuário: ${input}
+        
+        Por favor, lembre-se de responder de forma clara e objetiva, e tomando como referência a tabela de dados fornecida.`;
+
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const text = response.text();
+
+      // Add AI response
+      setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         type: 'bot',
-        content: `I see you're asking about "${input}". What specific information would you like to know about the data?`
-      };
-      setMessages(prev => [...prev, botResponse]);
-    }, 1000);
+        content: text,
+      }]);
+    } catch (error) {
+      console.error('Error generating response:', error);
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        type: 'bot',
+        content: 'Sorry, I encountered an error while processing your request. Please try again.',
+      }]);
+    }
+
+    // Scroll to bottom of chat
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
   };
 
   const handleRowClick = (row: TableRow, index: number) => {
